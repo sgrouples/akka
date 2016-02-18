@@ -6,18 +6,10 @@ package akka.cluster.sharding
 import java.net.URLEncoder
 import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
+import akka.actor.SupervisorStrategy.Escalate
+
 import scala.concurrent.Await
-import akka.actor.Actor
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.Deploy
-import akka.actor.ExtendedActorSystem
-import akka.actor.Extension
-import akka.actor.ExtensionId
-import akka.actor.ExtensionIdProvider
-import akka.actor.NoSerializationVerificationNeeded
-import akka.actor.PoisonPill
-import akka.actor.Props
+import akka.actor._
 import akka.cluster.Cluster
 import akka.cluster.ddata.DistributedData
 import akka.cluster.singleton.ClusterSingletonManager
@@ -389,6 +381,14 @@ class ClusterSharding(system: ExtendedActorSystem) extends Extension {
 }
 
 /**
+ * Event that is published to event stream if shard coordinator can't be started, for example due to
+ * corrupted journal. It is published to `system.eventStream` in case of failure
+ * @param typeName - the name of the entity type
+ * @param e Exception that prevented shard coordinator from start
+ */
+class ShardCoordinatorStartFailure(val typeName: String, val e: Exception)
+
+/**
  * INTERNAL API.
  */
 private[akka] object ClusterShardingGuardian {
@@ -414,6 +414,16 @@ private[akka] class ClusterShardingGuardian extends Actor {
   val sharding = ClusterSharding(context.system)
   lazy val replicator = DistributedData(context.system).replicator
 
+  def shardCoordinatorStrategy(typeName: String) = OneForOneStrategy() {
+    case e: IllegalArgumentException ⇒
+      println("Coordinator works = IAE")
+      context.system.eventStream.publish(new ShardCoordinatorStartFailure(typeName, e))
+      Escalate
+    case t ⇒
+      println(s"Coordinator works 2  ${t}")
+      super.supervisorStrategy.decider.applyOrElse(t, (_: Any) ⇒ Escalate)
+  }
+
   private def coordinatorSingletonManagerName(encName: String): String =
     encName + "Coordinator"
 
@@ -435,12 +445,13 @@ private[akka] class ClusterShardingGuardian extends Actor {
               ShardCoordinator.props(typeName, settings, allocationStrategy)
             else
               ShardCoordinator.props(typeName, settings, allocationStrategy, replicator)
-          val singletonProps = BackoffSupervisor.props(
+          val singletonProps = BackoffSupervisor.propsWithSupervisorStrategy(
             childProps = coordinatorProps,
             childName = "coordinator",
             minBackoff = coordinatorFailureBackoff,
             maxBackoff = coordinatorFailureBackoff * 5,
-            randomFactor = 0.2).withDeploy(Deploy.local)
+            randomFactor = 0.2,
+            strategy = shardCoordinatorStrategy(typeName)).withDeploy(Deploy.local)
           val singletonSettings = settings.coordinatorSingletonSettings
             .withSingletonName("singleton").withRole(role)
           context.actorOf(ClusterSingletonManager.props(
