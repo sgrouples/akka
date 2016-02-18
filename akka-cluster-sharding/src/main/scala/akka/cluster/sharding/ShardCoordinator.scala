@@ -3,6 +3,7 @@
  */
 package akka.cluster.sharding
 
+import akka.actor.SupervisorStrategy.Escalate
 import akka.util.Timeout
 
 import scala.collection.immutable
@@ -54,7 +55,8 @@ object ShardCoordinator {
   trait ShardAllocationStrategy extends NoSerializationVerificationNeeded {
     /**
      * Invoked when the location of a new shard is to be decided.
-     * @param requester actor reference to the [[ShardRegion]] that requested the location of the
+      *
+      * @param requester actor reference to the [[ShardRegion]] that requested the location of the
      *                  shard, can be returned if preference should be given to the node where the shard was first accessed
      * @param shardId the id of the shard to allocate
      * @param currentShardAllocations all actor refs to `ShardRegion` and their current allocated shards,
@@ -67,7 +69,8 @@ object ShardCoordinator {
 
     /**
      * Invoked periodically to decide which shards to rebalance to another location.
-     * @param currentShardAllocations all actor refs to `ShardRegion` and their current allocated shards,
+      *
+      * @param currentShardAllocations all actor refs to `ShardRegion` and their current allocated shards,
      *                                in the order they were allocated
      * @param rebalanceInProgress set of shards that are currently being rebalanced, i.e.
      *                            you should not include these in the returned set
@@ -98,7 +101,8 @@ object ShardCoordinator {
 
     /**
      * Invoked when the location of a new shard is to be decided.
-     * @param requester actor reference to the [[ShardRegion]] that requested the location of the
+      *
+      * @param requester actor reference to the [[ShardRegion]] that requested the location of the
      *                  shard, can be returned if preference should be given to the node where the shard was first accessed
      * @param shardId the id of the shard to allocate
      * @param currentShardAllocations all actor refs to `ShardRegion` and their current allocated shards,
@@ -111,7 +115,8 @@ object ShardCoordinator {
 
     /**
      * Invoked periodically to decide which shards to rebalance to another location.
-     * @param currentShardAllocations all actor refs to `ShardRegion` and their current allocated shards,
+      *
+      * @param currentShardAllocations all actor refs to `ShardRegion` and their current allocated shards,
      *                                in the order they were allocated
      * @param rebalanceInProgress set of shards that are currently being rebalanced, i.e.
      *                            you should not include these in the returned set
@@ -155,6 +160,7 @@ object ShardCoordinator {
       } else emptyRebalanceResult
     }
   }
+
 
   /**
    * INTERNAL API
@@ -729,6 +735,16 @@ class PersistentShardCoordinator(typeName: String, settings: ClusterShardingSett
   override def snapshotPluginId: String = settings.snapshotPluginId
 
   var persistCount = 0
+
+  override val supervisorStrategy =  OneForOneStrategy() {
+    case e: IllegalArgumentException ⇒
+      println("Coordinator works = IAE")
+      context.system.eventStream.publish(new ShardCoordinatorStartFailure(typeName, e))
+      Escalate
+    case t ⇒
+      println(s"Coordinator works 2  ${t}")
+      super.supervisorStrategy.decider.applyOrElse(t, (_: Any) ⇒ Escalate)
+  }
 
   override def receiveRecover: Receive = {
     case evt: DomainEvent ⇒

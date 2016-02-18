@@ -414,16 +414,6 @@ private[akka] class ClusterShardingGuardian extends Actor {
   val sharding = ClusterSharding(context.system)
   lazy val replicator = DistributedData(context.system).replicator
 
-  def shardCoordinatorStrategy(typeName: String) = OneForOneStrategy() {
-    case e: IllegalArgumentException ⇒
-      println("Coordinator works = IAE")
-      context.system.eventStream.publish(new ShardCoordinatorStartFailure(typeName, e))
-      Escalate
-    case t ⇒
-      println(s"Coordinator works 2  ${t}")
-      super.supervisorStrategy.decider.applyOrElse(t, (_: Any) ⇒ Escalate)
-  }
-
   private def coordinatorSingletonManagerName(encName: String): String =
     encName + "Coordinator"
 
@@ -445,13 +435,12 @@ private[akka] class ClusterShardingGuardian extends Actor {
               ShardCoordinator.props(typeName, settings, allocationStrategy)
             else
               ShardCoordinator.props(typeName, settings, allocationStrategy, replicator)
-          val singletonProps = BackoffSupervisor.propsWithSupervisorStrategy(
+          val singletonProps = BackoffSupervisor.props(
             childProps = coordinatorProps,
             childName = "coordinator",
             minBackoff = coordinatorFailureBackoff,
             maxBackoff = coordinatorFailureBackoff * 5,
-            randomFactor = 0.2,
-            strategy = shardCoordinatorStrategy(typeName)).withDeploy(Deploy.local)
+            randomFactor = 0.2).withDeploy(Deploy.local)
           val singletonSettings = settings.coordinatorSingletonSettings
             .withSingletonName("singleton").withRole(role)
           context.actorOf(ClusterSingletonManager.props(
